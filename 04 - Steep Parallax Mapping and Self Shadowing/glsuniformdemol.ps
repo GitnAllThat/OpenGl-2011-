@@ -1,0 +1,493 @@
+#version 150
+
+
+
+in vec3 normal_PS;
+in vec2 tcoord_PS;
+in vec3 rawPos_PS;
+in vec3 rawNormal_PS;
+in vec3 rawTangent_PS;
+in vec3 rawBinormal_PS;
+
+
+
+out vec4 pixelColour;
+
+
+
+uniform mat4 worldMatrix;
+uniform mat4 viewMatrix;
+uniform mat4 projMatrix;
+uniform vec3 camPos;
+
+
+uniform float environmentBlend;
+uniform float heightMapDepth;
+
+
+uniform sampler2D mytexture;
+uniform sampler2D specMap;
+uniform sampler2D normalMap;
+uniform sampler2D heightMap;
+uniform samplerCube cubeMap;
+
+
+uniform int drawingSkybox;
+uniform int textureResolution;
+
+
+
+
+
+
+////////////////////
+//// Light Info ////
+////////////////////
+
+	uniform vec3 ambientLight;			//Ambient Light
+
+	struct DirectLight
+	{
+		vec3 direction;
+		vec3 colour;
+	};	
+
+	uniform float directLightsCount;				//Number of directlights being used
+	uniform DirectLight[5] directLights;
+
+
+	struct PointLight
+	{
+		vec3 position;
+		vec3 colour;
+	};	
+
+	uniform float pointLightsCount;					//Number of pointlights being used
+	uniform PointLight[5] pointLights;
+
+	const int NODIRECTLIGHTS = 5;
+	const int NOPOINTLIGHTS = 5;
+
+////////////////////
+//// Light Info ////
+////////////////////
+
+
+
+vec2 finalOffset;
+float finalHeight;
+mat3 toTangentSpace;
+
+
+
+
+struct CalculatedLights
+{
+	vec3 direction;
+	vec3 direction_TS;
+	vec3 colour;
+};	
+
+CalculatedLights[10] calculatedLights;
+int totalLights = 0;
+
+
+void setupLightDirections()
+{
+
+	for(int i = 0; i < NODIRECTLIGHTS; ++i)
+	{
+		if( i >= directLightsCount ) break;
+		calculatedLights[totalLights].direction = directLights[i].direction;
+		calculatedLights[totalLights].colour = directLights[i].colour;
+		++totalLights;
+	}
+
+	for(int i = 0; i < NOPOINTLIGHTS; ++i)
+	{
+		if( i >= pointLightsCount ) break;
+		calculatedLights[totalLights].direction = vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - pointLights[i].position;
+		calculatedLights[totalLights].direction = (normalize(viewMatrix * vec4(calculatedLights[totalLights].direction, 0))).xyz;
+
+		vec3 fragPosWorld = vec4 (worldMatrix * vec4(rawPos_PS, 1) ).xyz;
+		calculatedLights[totalLights].direction_TS = normalize( toTangentSpace * (fragPosWorld - pointLights[i].position));
+
+
+		calculatedLights[totalLights].colour = pointLights[i].colour;
+		
+		++totalLights;
+	}
+
+}
+
+
+
+
+
+void selfShadow(inout bool allowLighting, vec3 direction_TS, inout vec3 shadow)
+{
+
+		int stepsMax = 20;
+		vec3 fragPosWorld = vec4 (worldMatrix * vec4(rawPos_PS, 1) ).xyz;
+ 		float dot = dot(-fragPosWorld, (worldMatrix * vec4(rawNormal_PS,0)).xyz);
+		stepsMax = int(clamp((dot * stepsMax), 0, stepsMax));
+
+
+
+		float heightMapLimit = (length(direction_TS.xy ) / direction_TS.z)   * (heightMapDepth * (1-finalHeight));
+
+		vec2 heightOffsetMax = -(direction_TS.xy * heightMapLimit) ;
+
+		vec2 heightOffsetStep = (heightOffsetMax)/ float(stepsMax);
+
+
+
+
+
+
+		float currentHeight = finalHeight;
+
+		float heightMapValue;
+		vec2 heightOffset =+ finalOffset;
+		
+
+		//heightOffset += heightOffsetStep;
+		for(int stepCount = 0; stepCount < stepsMax; stepCount++)
+		{
+		
+			heightMapValue = texelFetch( heightMap,  ivec2(tcoord_PS + heightOffset), 0).r;
+			
+			if( heightMapValue > finalHeight )
+			{
+				allowLighting = false;
+				shadow = shadow - vec3(heightMapValue - finalHeight);
+				//break;
+			}
+		
+
+			heightOffset += heightOffsetStep;
+
+		}
+
+
+}
+
+
+
+
+
+
+
+void calculateLighting(out vec3 diffuseLighting, out vec3 specularLighting, vec3 specIntensity, vec3 normal_MapValue)
+{
+	float lightIntensity;	bool allowLighting = true;	vec3 shadow = vec3(1);
+	
+	for(int i = 0; i < 2; ++i)
+	{
+		if( i >= totalLights ) break;
+		
+		
+		selfShadow(allowLighting, calculatedLights[i].direction_TS, shadow);	//Might have to flip direction
+		//allowLighting = false;
+		
+		//if (allowLighting)
+		{
+			lightIntensity = clamp((dot(normal_MapValue, normalize(calculatedLights[i].direction))), 0, 1);	
+			diffuseLighting += shadow * (calculatedLights[i].colour * lightIntensity);
+			
+			////////////////////////////
+			//// Calculate Specular ////
+			////////////////////////////
+			
+				float firstDot = 2 * dot(normal_MapValue, calculatedLights[i].direction.xyz);
+				if(firstDot > 0.00000)
+				{
+					vec3 reflection = normalize(firstDot * normal_MapValue - calculatedLights[i].direction);
+			    
+					float dotProduct = dot(reflection, normalize( vec4(viewMatrix * vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - camPos, 0) ).xyz ));
+					if(dotProduct < 0 ) dotProduct=0;
+					
+					float shine = 20; 
+				
+					specularLighting += shadow * 2 * calculatedLights[i].colour * specIntensity * max(pow(dotProduct, shine), 0);
+				}
+
+			////////////////////////////
+			//// Calculate Specular ////
+			////////////////////////////
+		}
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+void main( )
+{
+
+	
+	if(drawingSkybox !=0)
+	{
+		vec4 VertexPosition = worldMatrix * vec4(rawPos_PS,1);
+		vec3 TextureCoordinate = VertexPosition.xyz - camPos;
+	
+	
+		pixelColour = texture(cubeMap, normalize(TextureCoordinate));
+	}
+	else
+	{
+	
+	
+
+		
+		
+		
+		
+		
+		
+
+		vec4 worldNormal2 =  normalize(inverse(transpose(worldMatrix)) * vec4(normalize(rawNormal_PS), 0));
+		vec4 worldNormal =  normalize(worldMatrix * vec4(normalize(rawNormal_PS), 0));
+		vec4 worldTangent =  normalize(worldMatrix * vec4(normalize(rawTangent_PS), 0));
+		vec4 worldBinormal =  normalize(worldMatrix * vec4(normalize(rawBinormal_PS), 0));
+		
+
+
+
+
+
+
+	////////////////////
+	//// Height Map ////
+	////////////////////
+		
+
+		
+		toTangentSpace = mat3(
+			worldTangent.x, -worldBinormal.x, worldNormal2.x, 
+			worldTangent.y, -worldBinormal.y, worldNormal2.y, 
+			worldTangent.z, -worldBinormal.z, worldNormal2.z );
+		
+		
+		vec3 fragPosWorld = vec4 (worldMatrix * vec4(rawPos_PS, 1) ).xyz;
+		
+		vec3 viewDirection_TS = normalize( toTangentSpace * (fragPosWorld - camPos));
+		
+
+		
+
+		
+		
+		
+		
+
+
+		
+		
+		
+		
+
+		
+ 		int stepsMax = 40;
+ 		float dot = dot(-fragPosWorld, (worldMatrix * vec4(rawNormal_PS,0)).xyz);
+		stepsMax = int(clamp((dot * stepsMax), 0, stepsMax));
+
+
+		float heightMapLimit = (length(viewDirection_TS.xy* heightMapDepth) / viewDirection_TS.z)   ;
+
+		vec2 heightOffsetMax = viewDirection_TS.xy * heightMapLimit;
+
+
+
+
+		
+		
+		vec2 heightOffsetStep = heightOffsetMax / float(stepsMax);
+		float heightStep = 1 / float(stepsMax);
+
+
+
+
+		float currentHeight = 1;
+
+		float heightMapValue;
+		vec2 heightOffset = vec2(0);
+		
+		
+		for(int stepCount = 0; stepCount < stepsMax; stepCount++)
+		{
+		
+			heightMapValue = texelFetch( heightMap,  ivec2(tcoord_PS + heightOffset), 0).r;
+			
+			if( currentHeight < heightMapValue )
+				break;
+		
+		
+			currentHeight -= heightStep;
+			heightOffset += heightOffsetStep;
+		}
+		
+		finalOffset = heightOffset - heightOffsetStep;
+		finalHeight = currentHeight + heightStep;
+		
+		
+		
+		
+
+
+		
+
+	
+		/*
+		heightOffsetStep = (finalOffset - heightOffset) * 0.5;
+		heightStep = (finalHeight - currentHeight) * 0.5;
+		
+		
+		for(int i = 0; i < 10; ++i)
+		{
+			
+			heightMapValue = texelFetch( heightMap,  ivec2(tcoord_PS + heightOffset), 0).r;
+			
+			if( currentHeight < heightMapValue )
+			{
+				currentHeight += heightStep;
+				heightOffset -= heightOffsetStep;
+			
+			}
+			else
+			{
+				currentHeight -= heightStep;
+				heightOffset += heightOffsetStep;
+			
+			}
+		
+			heightOffsetStep *= 0.5;
+			heightStep *= 0.5;
+		
+		}
+		finalOffset = heightOffset - heightOffsetStep;
+		finalHeight = currentHeight + heightStep;
+		*/
+		
+		
+		
+	////////////////////
+	//// Height Map ////
+	////////////////////	
+
+	
+	
+		
+		
+		vec3 textureColour = texelFetch(mytexture, ivec2(tcoord_PS  + heightOffset), 0).rgb;												//Gets the texture colour 
+		vec3 specIntensity = texelFetch(specMap, ivec2(tcoord_PS  + heightOffset), 0).rgb;													//Gets the texture specular coef
+		vec3 normal_MapValue = normalize(1.5 * (texelFetch(normalMap, ivec2(tcoord_PS  + heightOffset), 0).rgb - (0.5, 0.5, 0.5)));			//Gets the normal;	
+		
+		normal_MapValue = normalize(normal_PS.xyz + (normal_MapValue.x * worldTangent.xyz + normal_MapValue.y * worldBinormal.xyz  ));
+		
+		
+		
+		
+		
+		
+		if(tcoord_PS.x + heightOffset.x < 0 || tcoord_PS.x + heightOffset.x > textureResolution || tcoord_PS.y + heightOffset.y < 0 || tcoord_PS.y + heightOffset.y > textureResolution)
+			discard;
+
+
+			
+			
+			
+
+
+
+
+
+		
+	//////////////////
+	//// Lighting ////
+	//////////////////
+
+		vec3 diffuseLighting = vec3(0,0,0);
+		vec3 specularLighting = vec3(0,0,0);
+
+		setupLightDirections();
+		calculateLighting(diffuseLighting, specularLighting, specIntensity, normal_MapValue);
+	
+	//////////////////
+	//// Lighting ////
+	//////////////////
+
+
+
+
+
+
+
+		
+
+
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		////////////////////////////
+		//// CubeMap Reflection ////
+		////////////////////////////
+		
+			vec3 ReflectionNormal_MapValue = texelFetch(normalMap, ivec2(tcoord_PS + heightOffset), 0).rgb - (0.5, 0.5, 0.5);
+			
+			ReflectionNormal_MapValue = normalize(worldNormal.xyz + (ReflectionNormal_MapValue.x * worldTangent.xyz + ReflectionNormal_MapValue.y * worldBinormal.xyz));
+			
+			//if(normalToggle == 0)ReflectionNormal_MapValue = worldNormal.xyz;											//Toggle Using the normal map	
+			
+			
+			
+			
+
+
+			vec4 VertexPosition = worldMatrix * vec4(rawPos_PS,1);
+			vec3 ViewDirection = (camPos - VertexPosition.xyz);
+			
+
+
+			vec3 Reflection = reflect(-normalize(ViewDirection), ReflectionNormal_MapValue);
+			vec4 cubeMapReflectionColour = texture(cubeMap, Reflection);
+
+
+		////////////////////////////
+		//// CubeMap Reflection ////
+		////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+
+		pixelColour = mix(cubeMapReflectionColour, vec4( textureColour * (diffuseLighting + ambientLight + specularLighting), 1.0 ), environmentBlend);
+		
+	}
+}	
+
+
+

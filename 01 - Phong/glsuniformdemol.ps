@@ -1,0 +1,168 @@
+#version 150
+
+
+in vec3 colour_PS;					//Colour sent from Vertex Shader.
+in vec3 normal_PS;
+in vec3 rawPos_PS;
+
+out vec4 pixelColour;				//Colour of pixel.
+
+
+
+uniform mat4 worldMatrix;
+uniform mat4 viewMatrix;
+uniform mat4 projMatrix;
+uniform vec3 camPos;
+
+
+////////////////////
+//// Light Info ////
+////////////////////
+
+	uniform vec3 ambientLight;			//Ambient Light
+
+	struct DirectLight
+	{
+		vec3 direction;
+		vec3 colour;
+	};	
+
+	uniform float directLightsCount;				//Number of directlights being used
+	uniform DirectLight[5] directLights;
+
+
+	struct PointLight
+	{
+		vec3 position;
+		vec3 colour;
+	};	
+
+	uniform float pointLightsCount;					//Number of pointlights being used
+	uniform PointLight[5] pointLights;
+
+	const int NODIRECTLIGHTS = 5;
+	const int NOPOINTLIGHTS = 5;
+
+////////////////////
+//// Light Info ////
+////////////////////
+
+
+
+
+
+
+
+void main( )
+{
+
+
+	
+	//////////////////
+	//// Lighting ////
+	//////////////////
+
+		float lightIntensity;
+		vec3 diffuseLighting = vec3(0,0,0);
+		vec3 specular = vec3(0,0,0);
+		vec4 direction;		
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Direct Light Code ///////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////
+
+			for(int i = 0; i < NODIRECTLIGHTS; ++i)
+			{
+				if( i >= directLightsCount ) break;
+				lightIntensity = clamp((dot(normal_PS, normalize(directLights[i].direction))), 0, 1);	
+				diffuseLighting += (directLights[i].colour * lightIntensity);
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+					float firstDot = 2 * dot(normal_PS, directLights[i].direction.xyz);
+					if(firstDot > 0)
+					{
+						vec3 reflection = normalize(firstDot * normal_PS - directLights[i].direction.xyz);
+				    
+						float dotProduct = dot(reflection, normalize( vec4(viewMatrix * vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - camPos, 0) ).xyz ));
+						if(dotProduct < 0 ) dotProduct=0;
+						
+
+						float shine = 50; 
+					
+						specular += 2 * directLights[i].colour * max(pow(dotProduct, shine), 0);
+					}
+
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+			}
+
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Direct Light Code ///////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////
+			
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Point Light Code ////////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////		
+
+			for(int i = 0; i < NOPOINTLIGHTS; ++i)
+			{
+				if( i >= pointLightsCount ) break;
+				
+				direction = vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - pointLights[i].position, 0);
+				direction = normalize(viewMatrix * direction);
+				
+				lightIntensity = clamp((dot(normal_PS, direction.xyz)), 0, 1);
+				diffuseLighting += (pointLights[i].colour * lightIntensity);
+				
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+					float firstDot = 2 * dot(normal_PS, direction.xyz);
+					if(firstDot >0)
+					{
+								
+						vec3 reflection = normalize(firstDot * normal_PS - direction.xyz);
+				    
+						float dotProduct = dot(reflection, normalize( vec4(viewMatrix * vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - camPos, 0) ).xyz ));
+				    
+
+						float shine = 50; 
+					
+						specular += 2 * pointLights[i].colour * max(pow(dotProduct, shine), 0);
+					}
+
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+			}
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Point Light Code ////////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////	
+		
+	//////////////////
+	//// Lighting ////
+	//////////////////
+
+
+
+
+
+
+
+
+	pixelColour = vec4( colour_PS * (diffuseLighting + ambientLight + specular), 1.0 );
+
+}	
+
+
+
+

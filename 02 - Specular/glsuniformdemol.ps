@@ -1,0 +1,293 @@
+#version 150
+
+
+
+in vec3 colour_PS;
+in vec3 normal_PS;
+in vec2 tcoord_PS;
+in vec3 rawPos_PS;
+
+
+
+
+
+out vec4 pixelColour;
+
+
+
+uniform mat4 worldMatrix;
+uniform mat4 viewMatrix;
+uniform mat4 projMatrix;
+uniform vec3 camPos;
+
+uniform sampler2D mytexture;
+uniform sampler2D specMap;
+
+
+
+
+
+
+
+//uniform vec2 TexMapSize;
+
+
+
+
+////////////////////
+//// Light Info ////
+////////////////////
+
+	uniform vec3 ambientLight;			//Ambient Light
+
+	struct DirectLight
+	{
+		vec3 direction;
+		vec3 colour;
+	};	
+
+	uniform float directLightsCount;				//Number of directlights being used
+	uniform DirectLight[5] directLights;
+
+
+	struct PointLight
+	{
+		vec3 position;
+		vec3 colour;
+	};	
+
+	uniform float pointLightsCount;					//Number of pointlights being used
+	uniform PointLight[5] pointLights;
+
+	const int NODIRECTLIGHTS = 5;
+	const int NOPOINTLIGHTS = 5;
+
+////////////////////
+//// Light Info ////
+////////////////////
+
+
+
+
+
+
+
+float getLOD( vec2 dtx, vec2 dty );
+float frexp( float x, out float e );
+vec4 bilinear(int LOD,vec2 tcoords);
+
+
+
+
+
+void main( )
+{
+
+
+
+
+
+			////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			////vec3 textureshade;																					////		
+			////																									////
+			////vec2 dtx = dFdx( tc_out );						//Do not understand dFdx and dFdy					////
+			////vec2 dty = dFdy( tc_out );;						//Do not understand dFdx and dFdy					////
+			////																									////////////////////////
+			////float fLOD = getLOD(dtx, dty);																		////////////////////////
+			////int iLOD = int(floor(fLOD));																		//// Not in use atm ////
+			////float fracLOD = fLOD - iLOD;																		////////////////////////
+			////																									////////////////////////
+			////textureshade = (bilinear(iLOD,tc_out)*(1.0-fracLOD)+bilinear(iLOD+1,tc_out)*fracLOD).rgb;			////
+			////	textureshade = bilinear(iLOD,tc_out).rgb;														////
+			////textureshade=texelFetch(mytexture,ivec2(tc_out)>>iLOD,iLOD).rgb;									////
+			////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	
+	vec3 textureshade = texelFetch(mytexture, ivec2(tcoord_PS), 0).rgb;			//Gets the texture colour
+	vec3 specIntensity = texelFetch(specMap, ivec2(tcoord_PS), 0).rgb;			//Gets the texture colour
+
+	
+	
+	
+	
+	//////////////////
+	//// Lighting ////
+	//////////////////
+
+		float lightIntensity;
+		vec3 diffuseLighting = vec3(0,0,0);
+		vec3 specular = vec3(0,0,0);
+		vec4 direction;		
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Direct Light Code ///////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////
+
+			for(int i = 0; i < NODIRECTLIGHTS; ++i)
+			{
+				if( i >= directLightsCount ) break;
+				lightIntensity = clamp((dot(normal_PS, normalize(directLights[i].direction))), 0, 1);	
+				diffuseLighting += (directLights[i].colour * lightIntensity);
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+					float firstDot = 2 * dot(normal_PS, directLights[i].direction.xyz);
+					if(firstDot > 0.00001)
+					{
+						vec3 reflection = normalize(firstDot * normal_PS - directLights[i].direction.xyz);
+				    
+						float dotProduct = dot(reflection, normalize( vec4(viewMatrix * vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - camPos, 0) ).xyz ));
+						if(dotProduct < 0 ) dotProduct=0;
+						
+
+						float shine = 50; 
+					
+						specular += 2 * directLights[i].colour * specIntensity * max(pow(dotProduct, shine), 0);
+					}
+
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+			}
+
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Direct Light Code ///////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////
+			
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Point Light Code ////////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////		
+
+			for(int i = 0; i < NOPOINTLIGHTS; ++i)
+			{
+				if( i >= pointLightsCount ) break;
+				
+				direction = vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - pointLights[i].position, 0);
+				direction = normalize(viewMatrix * direction);
+				
+				lightIntensity = clamp((dot(normal_PS, direction.xyz)), 0, 1);
+				diffuseLighting += (pointLights[i].colour * lightIntensity);
+				
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+					float firstDot = 2 * dot(normal_PS, direction.xyz);
+					if(firstDot > 0.00001)
+					{
+								
+						vec3 reflection = normalize(firstDot * normal_PS - direction.xyz);
+				    
+						float dotProduct = dot(reflection, normalize( vec4(viewMatrix * vec4(vec4(worldMatrix* vec4(rawPos_PS,1)).xyz - camPos, 0) ).xyz ));
+				    
+
+						float shine = 50; 
+					
+						specular += 2 * pointLights[i].colour * specIntensity * max(pow(dotProduct, shine), 0);
+					}
+
+				
+				////////////////////////////
+				//// Calculate Specular ////
+				////////////////////////////
+				
+			}
+		/////////////////////////////////////////////////////////////////////////////////
+		/////////////////////////////// Point Light Code ////////////////////////////////
+		/////////////////////////////////////////////////////////////////////////////////	
+		
+	//////////////////
+	//// Lighting ////
+	//////////////////
+
+
+
+
+
+
+
+
+	pixelColour = vec4( textureshade * (diffuseLighting + ambientLight + specular), 1.0 );
+	
+
+}	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+float frexp( float x, out float e )
+{
+   e = ceil( log2( x ) );
+   return( x * exp2( -e ) );
+}
+
+float getLOD( vec2 dtx, vec2 dty )
+{
+	// Get partial derivates
+
+
+	// Work out diagonals
+	float fTx = dtx.x + dty.x;
+	float fTy = dtx.y + dty.y;
+	float fXd = fTx * fTx + fTy * fTy;
+	//fXd is first diagonal distance (1,1)
+	fTx = dtx.x - dty.x;
+	fTy = dtx.y - dty.y;
+	float fYd = fTx * fTx + fTy * fTy;
+	//fYd is second diagonal distance (1,-1)
+
+	float fpixelDiff = max( fXd, fYd );
+
+	
+	// Work out Level of Detail & compensate for not taking square root
+	float LOD = log2( fpixelDiff / 2 ) / 2;
+
+	LOD = max(LOD, 0.0);
+	return (LOD);
+}
+
+
+
+vec4 bilinear(int LOD,vec2 tcoords)
+{
+	vec2 cscal=(tcoords)*exp2(-LOD);//get the lower value note that his will mpy x by x and y by y
+	vec2 lo=floor(cscal);//get the lower value note that his will mpy x by x and y by y
+	vec2 frac=cscal-lo;
+	float w0=frac.x*frac.y;
+	float w1=(1.0-frac.x)*frac.y;
+	float w2=frac.x*(1.0-frac.y);
+	float w3=(1.0-frac.x)*(1.0-frac.y);
+	ivec2 cd=ivec2(lo);
+	vec4 c3= texelFetch(mytexture,cd,LOD) *w3;
+	cd.x+=1;//increment by 1 scaled texel
+	vec4 c2= texelFetch(mytexture,cd,LOD)*w2;
+	cd.y+=1;//increment by 1 scaled texel
+	
+	vec4 c0= texelFetch(mytexture,cd,LOD)*w0;
+	cd.x-=1;//now undo the x to get the last one
+	vec4 c1= texelFetch(mytexture,cd,LOD)*w1;
+	return c3+c1+c2+c0;
+}
